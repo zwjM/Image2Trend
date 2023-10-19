@@ -1,6 +1,9 @@
+
+from importlib import reload
 from __init__ import *
 import utils as _U
 reload(_U)
+import numpy as np
 
 
 SUPPORTED_INDICATORS = ['MA']
@@ -101,7 +104,7 @@ def single_symbol_image(tabular_df, image_size, start_date, sample_rate, indicat
 
 
 class ImageDataSet():
-    def __init__(self, win_size, start_date, end_date, mode, label, indicators=[], show_volume=False, parallel_num=-1):
+    def __init__(self, win_size, start_date, end_date, mode, label, indicators=[], show_volume=False, parallel_num=-1,split_ratio=0.7):
         ## Check whether inputs are valid
         assert isinstance(start_date, int) and isinstance(end_date, int), f'Type Error: start_date & end_date shoule be int'
         assert start_date < end_date, f'start date {start_date} cannnot be later than end date {end_date}'
@@ -128,7 +131,7 @@ class ImageDataSet():
         self.indicators = indicators
         self.show_volume = show_volume
         self.parallel_num = parallel_num
-        
+        self.split_ratio = split_ratio
         ## Load data from zipfile
         self.load_data()
         
@@ -140,7 +143,7 @@ class ImageDataSet():
         print(f"DataSet Initialized\n \t - Mode:         {self.mode.upper()}\n \t - Image Size:   {self.image_size}\n \t - Time Period:  {self.start_date} - {self.end_date}\n \t - Indicators:   {ind_info}\n \t - Volume Shown: {self.show_volume}")
         
         
-    @_U.timer('Load Data', '8')
+    @_U.timer('Load Data', '1000')
     def load_data(self):
         if 'data' not in os.listdir():
             print('Download Original Tabular Data')
@@ -155,19 +158,24 @@ class ImageDataSet():
             tabularDf = pd.read_csv(f, index_col=0)
             f.close()
             z.close()
-            
-        # add extra rows to make sure image of start date and returns of end date can be calculated
+
+        # # add extra rows to make sure image of start date and returns of end date can be calculated
         padding_start_date = int(str(pd.to_datetime(str(self.start_date)) - self.extra_dates).split(' ')[0].replace('-', ''))
         paddint_end_date = int(str(pd.to_datetime(str(self.end_date)) + self.extra_dates).split(' ')[0].replace('-', ''))
         self.df = tabularDf.loc[(tabularDf['date'] > padding_start_date) & (tabularDf['date'] < paddint_end_date)].copy(deep=False)
-        tabularDf = [] # clear memory
-        
-        self.df['ret5'] = np.zeros(self.df.shape[0])
-        self.df['ret20'] = np.zeros(self.df.shape[0])
-        self.df['ret5'] = (self.df['close'].pct_change(5)*100).shift(-5)
-        self.df['ret20'] = (self.df['close'].pct_change(20)*100).shift(-20)
-        
-        self.df = self.df.loc[self.df['date'] <= self.end_date]
+        # tabularDf = [] # clear memory
+        # print(paddint_end_date,padding_start_date)
+        # self.df['ret5'] = np.zeros(self.df.shape[0])
+        # self.df['ret20'] = np.zeros(self.df.shape[0])
+        # self.df['ret5'] = (self.df['close'].pct_change(5)*100).shift(-5)
+        # self.df['ret20'] = (self.df['close'].pct_change(20)*100).shift(-20)
+
+        # self.df = tabularDf.copy(deep=False)
+        self.df['ret5'] =  self.df.groupby('code')['close'].pct_change(5).shift(-5) * 100
+        self.df['ret20'] =  self.df.groupby('code')['close'].pct_change(20).shift(-20) * 100
+        self.df = self.df.loc[(self.df['date'] <= self.end_date)&(self.df['date'] >= self.start_date)]
+
+        # self.df = self.df.loc[self.df['date'] <= self.end_date]
         
         
     def generate_images(self, sample_rate):
@@ -179,37 +187,44 @@ class ImageDataSet():
                                           show_volume = self.show_volume, \
                                             mode = self.mode
                                         ) for g in tqdm(self.df.groupby('code'), desc=f'Generating Images (sample rate: {sample_rate})'))
-        
-        if self.mode == 'train' or self.mode == 'test':
+        if self.mode == 'train':
+            train_image_set = []
+            validate_image_set = []
+            for symbol_data in dataset_all:
+                train_size = int(len(symbol_data) * (1 - self.split_ratio))
+                # valid_size = len(symbol_data) - train_size
+                train_image_set = train_image_set +symbol_data[:train_size]
+                validate_image_set = validate_image_set + symbol_data[train_size:]
+
+            # resample itrain_image_set
+            train_image_set = pd.DataFrame(train_image_set, columns=['img', 'ret5', 'ret20'])
+            train_image_set['index'] = train_image_set.index
+            smote = SMOTE()
+            if self.label == 'RET5':
+                num0_before = train_image_set.loc[train_image_set['ret5'] == 0].shape[0]
+                num1_before = train_image_set.loc[train_image_set['ret5'] == 1].shape[0]
+                resample_index, _ = smote.fit_resample(train_image_set[['index', 'ret20']], train_image_set['ret5'])
+                train_image_set = train_image_set[['img', 'ret5', 'ret20']].loc[resample_index['index']]
+                num0 = train_image_set.loc[train_image_set['ret5'] == 0].shape[0]
+                num1 = train_image_set.loc[train_image_set['ret5'] == 1].shape[0]
+                train_image_set = train_image_set.values.tolist()
+
+            else:
+                num0_before = train_image_set.loc[train_image_set['ret20'] == 0].shape[0]
+                num1_before = train_image_set.loc[train_image_set['ret20'] == 1].shape[0]
+                resample_index, _ = smote.fit_resample(train_image_set[['index', 'ret5']], train_image_set['ret20'])
+                train_image_set = train_image_set[['img', 'ret5', 'ret20']].loc[resample_index['index']]
+                num0 = train_image_set.loc[train_image_set['ret20'] == 0].shape[0]
+                num1 = train_image_set.loc[train_image_set['ret20'] == 1].shape[0]
+                train_image_set = train_image_set.values.tolist()
+            print(f"LABEL: {self.label}\n\tBefore Resample: 0: {num0_before}/{num0_before + num1_before}, 1: {num1_before}/{num0_before + num1_before}\n\tResampled ImageSet: 0: {num0}/{num0 + num1}, 1: {num1}/{num0 + num1}")
+            return train_image_set,validate_image_set
+
+        elif self.mode == 'test':
             image_set = []
             for symbol_data in dataset_all:
                 image_set = image_set + symbol_data
             dataset_all = [] # clear memory
-            
-            if self.mode == 'train': # resample to handle imbalance
-                image_set = pd.DataFrame(image_set, columns=['img', 'ret5', 'ret20'])
-                image_set['index'] =  image_set.index
-                smote = SMOTE()
-                if self.label == 'RET5':
-                    num0_before = image_set.loc[image_set['ret5'] == 0].shape[0]
-                    num1_before = image_set.loc[image_set['ret5'] == 1].shape[0]
-                    resample_index, _ = smote.fit_resample(image_set[['index', 'ret20']], image_set['ret5'])
-                    image_set = image_set[['img', 'ret5', 'ret20']].loc[resample_index['index']]
-                    num0 = image_set.loc[image_set['ret5'] == 0].shape[0]
-                    num1 = image_set.loc[image_set['ret5'] == 1].shape[0]
-                    image_set = image_set.values.tolist()
-                    
-                else:
-                    num0_before = image_set.loc[image_set['ret20'] == 0].shape[0]
-                    num1_before = image_set.loc[image_set['ret20'] == 1].shape[0]
-                    resample_index, _ = smote.fit_resample(image_set[['index', 'ret5']], image_set['ret20'])
-                    image_set = image_set[['img', 'ret5', 'ret20']].loc[resample_index['index']]
-                    num0 = image_set.loc[image_set['ret20'] == 0].shape[0]
-                    num1 = image_set.loc[image_set['ret20'] == 1].shape[0]
-                    image_set = image_set.values.tolist()
-                    
-                print(f"LABEL: {self.label}\n\tBefore Resample: 0: {num0_before}/{num0_before+num1_before}, 1: {num1_before}/{num0_before+num1_before}\n\tResampled ImageSet: 0: {num0}/{num0+num1}, 1: {num1}/{num0+num1}")
-                 
             
             return image_set
     

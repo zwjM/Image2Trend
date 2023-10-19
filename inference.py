@@ -6,7 +6,7 @@ reload(_M)
 import dataset as _D
 reload(_D)
 
-
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 def model_inference(model, setting):
     
     model.eval()
@@ -28,18 +28,18 @@ def model_inference(model, setting):
         inference_imageset = inference_dataset.generate_images(1.0)
 
         for id in range(len(inference_imageset)-1):
-            if len(inference_dataset[id][1]) == 0:
+            if len(inference_imageset[id][1]) == 0: #inference_imageset[id] is data【codename,image,date】 of one code
                 continue
             inference_imgs = []
-            for img in inference_dataset[id][1]:
-                inference_imgs.append(img[0])
+            for img in inference_imageset[id][1]:
+                inference_imgs.append(img[0])  # img[0] is the image matrix
             input = torch.Tensor(np.array(inference_imgs))
             input = input.to(device)
             output = model(input)[:, 1]
             up_factors = []
             for pred in output:
                 up_factors.append(pred.item())
-            symbol_f = pd.DataFrame([[inference_dataset[id][0] for _ in range(len(inference_dataset[id][1]))], inference_dataset[id][2], up_factors], index=['code', 'date', 'up_factor']).T
+            symbol_f = pd.DataFrame([[inference_imageset[id][0] for _ in range(len(inference_imageset[id][1]))], inference_imageset[id][2], up_factors], index=['code', 'date', 'up_factor']).T
             
             symbol_factors = pd.concat([symbol_factors, symbol_f], axis=0)
             

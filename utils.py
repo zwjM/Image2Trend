@@ -1,6 +1,7 @@
 from __init__ import *
 
-
+from contextlib import contextmanager
+import time
 @contextmanager 
 def timer(name: str, _align): # ⏱
     s = time.time()

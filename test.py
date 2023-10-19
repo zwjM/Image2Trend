@@ -7,7 +7,7 @@ import dataset as _D
 reload(_D)
 import utils as _U
 reload(_U)
-
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def model_test(model, label_type, classes, criterion, setting):
     # track test loss
